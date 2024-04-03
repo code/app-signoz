@@ -148,7 +148,35 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 			dashboardLayout,
 		);
 		if (!isEqual(filterLayout, filterDashboardLayout)) {
-			setDashboardLayout(sortLayout(layout));
+			// need to calculate the panel map here
+			const updatedLayout = sortLayout(layout);
+			let prevRowIdx = '';
+			let tempWidgets: Layout[] = [];
+			const currentPanelMap = { ...panelMap };
+			for (let i = 0; i < updatedLayout.length; i++) {
+				if (currentPanelMap[updatedLayout[i].i]) {
+					if (prevRowIdx === '') {
+						prevRowIdx = updatedLayout[i].i;
+					} else {
+						currentPanelMap[prevRowIdx] = {
+							...currentPanelMap[prevRowIdx],
+							widgets: tempWidgets,
+						};
+						tempWidgets = [];
+						prevRowIdx = updatedLayout[i].i;
+					}
+				} else {
+					tempWidgets.push(updatedLayout[i]);
+				}
+			}
+			if (prevRowIdx !== '') {
+				currentPanelMap[prevRowIdx] = {
+					...currentPanelMap[prevRowIdx],
+					widgets: tempWidgets,
+				};
+			}
+			setPanelMap(currentPanelMap);
+			setDashboardLayout(updatedLayout);
 		}
 	};
 
@@ -263,6 +291,8 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 		setIsSettingsModalOpen(true);
 		setCurrentSelectRowId(id);
 	};
+
+	console.log(panelMap);
 
 	const onSettingsModalSubmit = (): void => {
 		// handle update of the title here

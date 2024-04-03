@@ -21,6 +21,7 @@ function DashboardGraphSlider(): JSX.Element {
 	const {
 		handleToggleDashboardSlider,
 		layouts,
+		panelMap,
 		selectedDashboard,
 	} = useDashboard();
 
@@ -44,6 +45,7 @@ function DashboardGraphSlider(): JSX.Element {
 					name: data?.name || '',
 					tags: data?.tags || [],
 					version: data?.version || 'v3',
+					panelMap: { ...panelMap },
 					layout: [
 						{
 							i: id,
