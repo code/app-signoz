@@ -15,6 +15,7 @@ import history from 'lib/history';
 import isEqual from 'lodash-es/isEqual';
 import { FullscreenIcon } from 'lucide-react';
 import { useDashboard } from 'providers/Dashboard/Dashboard';
+import { sortLayout } from 'providers/Dashboard/util';
 import { useCallback, useEffect, useState } from 'react';
 import { FullScreen, useFullScreenHandle } from 'react-full-screen';
 import { Layout } from 'react-grid-layout';
@@ -44,6 +45,7 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 	const {
 		selectedDashboard,
 		layouts,
+		panelMap,
 		setLayouts,
 		setSelectedDashboard,
 		isDashboardLocked,
@@ -87,7 +89,7 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 	);
 
 	useEffect(() => {
-		setDashboardLayout(layouts);
+		setDashboardLayout(sortLayout(layouts));
 	}, [layouts]);
 
 	const onSaveHandler = (): void => {
@@ -106,7 +108,7 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 			onSuccess: (updatedDashboard) => {
 				if (updatedDashboard.payload) {
 					if (updatedDashboard.payload.data.layout)
-						setLayouts(updatedDashboard.payload.data.layout);
+						setLayouts(sortLayout(updatedDashboard.payload.data.layout));
 					setSelectedDashboard(updatedDashboard.payload);
 				}
 
@@ -130,7 +132,7 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 			dashboardLayout,
 		);
 		if (!isEqual(filterLayout, filterDashboardLayout)) {
-			setDashboardLayout(layout);
+			setDashboardLayout(sortLayout(layout));
 		}
 	};
 
@@ -167,6 +169,24 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [dashboardLayout]);
 
+	function handleAddRow(): void {
+		/**
+		 * handleAddRow takes care of generating the panelMap for the newly added row
+		 * by populating the widgets under the current row and deleting them from the
+		 * dashboard layout
+		 */
+		const newRowWidgetMap: { widgets: string[] } = { widgets: [] };
+		const currentRowIdx = 0;
+		for (let j = currentRowIdx; j < dashboardLayout.length; j++) {
+			if (!panelMap[dashboardLayout[j].i]) {
+				newRowWidgetMap.widgets.push(dashboardLayout[j].i);
+			} else {
+				break;
+			}
+		}
+
+		console.log(newRowWidgetMap, 'newRowWidgetMap');
+	}
 	return (
 		<>
 			<ButtonContainer>
@@ -188,6 +208,16 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 						data-testid="add-panel"
 					>
 						{t('dashboard:add_panel')}
+					</Button>
+				)}
+				{!isDashboardLocked && addPanelPermission && (
+					<Button
+						className="periscope-btn"
+						onClick={(): void => handleAddRow()}
+						icon={<PlusOutlined />}
+						data-testid="add-row"
+					>
+						{t('dashboard:add_row')}
 					</Button>
 				)}
 			</ButtonContainer>
