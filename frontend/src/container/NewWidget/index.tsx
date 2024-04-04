@@ -82,7 +82,7 @@ function NewWidget({ selectedGraph }: NewWidgetProps): JSX.Element {
 
 	const getWidget = useCallback(() => {
 		const widgetId = query.get('widgetId');
-		return widgets?.find((e) => e.id === widgetId);
+		return widgets?.find((e) => e.id === widgetId) as Widgets;
 	}, [query, widgets]);
 
 	const [selectedWidget, setSelectedWidget] = useState(getWidget());

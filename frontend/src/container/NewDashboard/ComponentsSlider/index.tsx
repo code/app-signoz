@@ -6,6 +6,7 @@ import { useNotifications } from 'hooks/useNotifications';
 import createQueryParams from 'lib/createQueryParams';
 import history from 'lib/history';
 import { useDashboard } from 'providers/Dashboard/Dashboard';
+import { Widgets } from 'types/api/dashboard/getAll';
 import { LogsAggregatorOperator } from 'types/common/queryBuilder';
 import { v4 as uuid } from 'uuid';
 
@@ -89,7 +90,7 @@ function DashboardGraphSlider(): JSX.Element {
 							selectedTracesFields: [
 								...listViewInitialTraceQuery.builder.queryData[0].selectColumns,
 							],
-						},
+						} as Widgets,
 					],
 				},
 			},
