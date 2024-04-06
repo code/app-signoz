@@ -487,7 +487,7 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 			<FullScreen handle={handle} className="fullscreen-grid-container">
 				<ReactGridLayout
 					cols={12}
-					rowHeight={100}
+					rowHeight={50}
 					autoSize
 					width={100}
 					useCSSTransforms
