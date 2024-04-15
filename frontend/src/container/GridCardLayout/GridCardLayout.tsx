@@ -143,6 +143,7 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 					if (updatedDashboard.payload.data.layout)
 						setLayouts(sortLayout(updatedDashboard.payload.data.layout));
 					setSelectedDashboard(updatedDashboard.payload);
+					setPanelMap(updatedDashboard.payload.data.panelMap || {});
 				}
 
 				featureResponse.refetch();
@@ -278,7 +279,6 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 	};
 
 	const onSettingsModalSubmit = (): void => {
-		// handle update of the title here
 		const newTitle = form.getFieldValue('title');
 		if (!selectedDashboard) return;
 
@@ -331,6 +331,7 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 	const handleRowCollapse = (id: string): void => {
 		if (!selectedDashboard) return;
 		const rowProperties = { ...currentPanelMap[id] };
+		const updatedPanelMap = { ...currentPanelMap };
 
 		let updatedDashboardLayout = [...dashboardLayout];
 		if (rowProperties.collapsed === true) {
@@ -349,11 +350,19 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 
 			for (let j = idxCurrentRow + 1; j < dashboardLayout.length; j++) {
 				updatedDashboardLayout[j].y += maxY;
+				if (updatedPanelMap[updatedDashboardLayout[j].i]) {
+					updatedPanelMap[updatedDashboardLayout[j].i].widgets = updatedPanelMap[
+						updatedDashboardLayout[j].i
+						// eslint-disable-next-line @typescript-eslint/no-loop-func
+					].widgets.map((w) => ({
+						...w,
+						y: w.y + maxY,
+					}));
+				}
 			}
 			updatedDashboardLayout = [...updatedDashboardLayout, ...widgetsInsideTheRow];
 		} else {
 			rowProperties.collapsed = true;
-			// calculate the panel map
 			const currentIdx = dashboardLayout.findIndex((w) => w.i === id);
 
 			let widgetsInsideTheRow: Layout[] = [];
@@ -371,6 +380,26 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 			if (!isPanelMapUpdated) {
 				rowProperties.widgets = widgetsInsideTheRow;
 			}
+			let maxY = 0;
+			widgetsInsideTheRow.forEach((w) => {
+				maxY = Math.max(maxY, w.y + w.h);
+			});
+			const currentRowWidget = dashboardLayout[currentIdx];
+			if (currentRowWidget && widgetsInsideTheRow.length) {
+				maxY -= currentRowWidget.h + currentRowWidget.y;
+			}
+			for (let j = currentIdx + 1; j < updatedDashboardLayout.length; j++) {
+				updatedDashboardLayout[j].y += maxY;
+				if (updatedPanelMap[updatedDashboardLayout[j].i]) {
+					updatedPanelMap[updatedDashboardLayout[j].i].widgets = updatedPanelMap[
+						updatedDashboardLayout[j].i
+						// eslint-disable-next-line @typescript-eslint/no-loop-func
+					].widgets.map((w) => ({
+						...w,
+						y: w.y + maxY,
+					}));
+				}
+			}
 
 			updatedDashboardLayout = updatedDashboardLayout.filter(
 				(widget) => !rowProperties.widgets.some((w: Layout) => w.i === widget.i),
@@ -378,6 +407,7 @@ function GraphLayout({ onAddPanelHandler }: GraphLayoutProps): JSX.Element {
 		}
 		setCurrentPanelMap((prev) => ({
 			...prev,
+			...updatedPanelMap,
 			[id]: {
 				...rowProperties,
 			},
