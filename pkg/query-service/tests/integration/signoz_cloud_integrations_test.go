@@ -3,21 +3,23 @@ package tests
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/SigNoz/signoz/pkg/modules/quickfilter"
-	quickfilterscore "github.com/SigNoz/signoz/pkg/modules/quickfilter/core"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/SigNoz/signoz/pkg/modules/quickfilter"
+	quickfilterscore "github.com/SigNoz/signoz/pkg/modules/quickfilter/core"
+
 	"github.com/SigNoz/signoz/pkg/http/middleware"
 	"github.com/SigNoz/signoz/pkg/modules/organization/implorganization"
+	"github.com/SigNoz/signoz/pkg/modules/user"
+	"github.com/SigNoz/signoz/pkg/modules/user/impluser"
 	"github.com/SigNoz/signoz/pkg/signoz"
 
 	"github.com/SigNoz/signoz/pkg/instrumentation/instrumentationtest"
 	"github.com/SigNoz/signoz/pkg/query-service/app"
 	"github.com/SigNoz/signoz/pkg/query-service/app/cloudintegrations"
-	"github.com/SigNoz/signoz/pkg/query-service/dao"
 	"github.com/SigNoz/signoz/pkg/query-service/featureManager"
 	"github.com/SigNoz/signoz/pkg/query-service/utils"
 	"github.com/SigNoz/signoz/pkg/sqlstore"
@@ -346,6 +348,7 @@ type CloudIntegrationsTestBed struct {
 	testUser       *types.User
 	qsHttpHandler  http.Handler
 	mockClickhouse mockhouse.ClickConnMockCommon
+	userModule     user.Module
 }
 
 // testDB can be injected for sharing a DB across multiple integration testbeds.
@@ -363,13 +366,14 @@ func NewCloudIntegrationsTestBed(t *testing.T, testDB sqlstore.SQLStore) *CloudI
 	reader, mockClickhouse := NewMockClickhouseReader(t, testDB)
 	mockClickhouse.MatchExpectationsInOrder(false)
 
-	modules := signoz.NewModules(testDB)
-	handlers := signoz.NewHandlers(modules)
+	userModule := impluser.NewModule(impluser.NewStore(testDB))
+	userHandler := impluser.NewHandler(userModule)
+	modules := signoz.NewModules(testDB, userModule)
+	handlers := signoz.NewHandlers(modules, userHandler)
 	quickFilterModule := quickfilter.NewAPI(quickfilterscore.NewQuickFilters(quickfilterscore.NewStore(testDB)))
 
 	apiHandler, err := app.NewAPIHandler(app.APIHandlerOpts{
 		Reader:                      reader,
-		AppDao:                      dao.DB(),
 		CloudIntegrationsController: controller,
 		FeatureFlags:                fm,
 		JWT:                         jwt,
@@ -390,7 +394,7 @@ func NewCloudIntegrationsTestBed(t *testing.T, testDB sqlstore.SQLStore) *CloudI
 	apiHandler.RegisterCloudIntegrationsRoutes(router, am)
 
 	organizationModule := implorganization.NewModule(implorganization.NewStore(testDB))
-	user, apiErr := createTestUser(organizationModule)
+	user, apiErr := createTestUser(organizationModule, userModule)
 	if apiErr != nil {
 		t.Fatalf("could not create a test user: %v", apiErr)
 	}
@@ -400,6 +404,7 @@ func NewCloudIntegrationsTestBed(t *testing.T, testDB sqlstore.SQLStore) *CloudI
 		testUser:       user,
 		qsHttpHandler:  router,
 		mockClickhouse: mockClickhouse,
+		userModule:     userModule,
 	}
 }
 
@@ -556,7 +561,7 @@ func (tb *CloudIntegrationsTestBed) RequestQS(
 	postData interface{},
 ) (responseDataJson []byte) {
 	req, err := AuthenticatedRequestForTest(
-		tb.testUser, path, postData,
+		tb.userModule, tb.testUser, path, postData,
 	)
 	if err != nil {
 		tb.t.Fatalf("couldn't create authenticated test request: %v", err)
