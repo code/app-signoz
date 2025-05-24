@@ -4,13 +4,16 @@ import (
 	"context"
 	"testing"
 
+	"github.com/SigNoz/signoz/pkg/emailing"
+	"github.com/SigNoz/signoz/pkg/emailing/noopemailing"
+	"github.com/SigNoz/signoz/pkg/instrumentation/instrumentationtest"
 	"github.com/SigNoz/signoz/pkg/modules/organization"
 	"github.com/SigNoz/signoz/pkg/modules/organization/implorganization"
-	"github.com/SigNoz/signoz/pkg/query-service/dao"
+	"github.com/SigNoz/signoz/pkg/modules/user"
+	"github.com/SigNoz/signoz/pkg/modules/user/impluser"
 	"github.com/SigNoz/signoz/pkg/query-service/model"
 	"github.com/SigNoz/signoz/pkg/query-service/utils"
 	"github.com/SigNoz/signoz/pkg/types"
-	"github.com/SigNoz/signoz/pkg/types/authtypes"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +25,10 @@ func TestRegenerateConnectionUrlWithUpdatedConfig(t *testing.T) {
 	require.NoError(err)
 
 	organizationModule := implorganization.NewModule(implorganization.NewStore(sqlStore))
-	user, apiErr := createTestUser(organizationModule)
+	providerSettings := instrumentationtest.New().ToProviderSettings()
+	emailing, _ := noopemailing.New(context.Background(), providerSettings, emailing.Config{})
+	userModule := impluser.NewModule(impluser.NewStore(sqlStore), nil, emailing, providerSettings)
+	user, apiErr := createTestUser(organizationModule, userModule)
 	require.Nil(apiErr)
 
 	// should be able to generate connection url for
@@ -69,7 +75,10 @@ func TestAgentCheckIns(t *testing.T) {
 	controller, err := NewController(sqlStore)
 	require.NoError(err)
 	organizationModule := implorganization.NewModule(implorganization.NewStore(sqlStore))
-	user, apiErr := createTestUser(organizationModule)
+	providerSettings := instrumentationtest.New().ToProviderSettings()
+	emailing, _ := noopemailing.New(context.Background(), providerSettings, emailing.Config{})
+	userModule := impluser.NewModule(impluser.NewStore(sqlStore), nil, emailing, providerSettings)
+	user, apiErr := createTestUser(organizationModule, userModule)
 	require.Nil(apiErr)
 
 	// An agent should be able to check in from a cloud account even
@@ -156,7 +165,10 @@ func TestCantDisconnectNonExistentAccount(t *testing.T) {
 	require.NoError(err)
 
 	organizationModule := implorganization.NewModule(implorganization.NewStore(sqlStore))
-	user, apiErr := createTestUser(organizationModule)
+	providerSettings := instrumentationtest.New().ToProviderSettings()
+	emailing, _ := noopemailing.New(context.Background(), providerSettings, emailing.Config{})
+	userModule := impluser.NewModule(impluser.NewStore(sqlStore), nil, emailing, providerSettings)
+	user, apiErr := createTestUser(organizationModule, userModule)
 	require.Nil(apiErr)
 
 	// Attempting to disconnect a non-existent account should return error
@@ -175,7 +187,10 @@ func TestConfigureService(t *testing.T) {
 	require.NoError(err)
 
 	organizationModule := implorganization.NewModule(implorganization.NewStore(sqlStore))
-	user, apiErr := createTestUser(organizationModule)
+	providerSettings := instrumentationtest.New().ToProviderSettings()
+	emailing, _ := noopemailing.New(context.Background(), providerSettings, emailing.Config{})
+	userModule := impluser.NewModule(impluser.NewStore(sqlStore), nil, emailing, providerSettings)
+	user, apiErr := createTestUser(organizationModule, userModule)
 	require.Nil(apiErr)
 
 	// create a connected account
@@ -290,7 +305,7 @@ func makeTestConnectedAccount(t *testing.T, orgId string, controller *Controller
 	return acc
 }
 
-func createTestUser(organizationModule organization.Module) (*types.User, *model.ApiError) {
+func createTestUser(organizationModule organization.Module, userModule user.Module) (*types.User, *model.ApiError) {
 	// Create a test user for auth
 	ctx := context.Background()
 	organization := types.NewOrganization("test")
@@ -299,17 +314,18 @@ func createTestUser(organizationModule organization.Module) (*types.User, *model
 		return nil, model.InternalError(err)
 	}
 
-	userId := uuid.NewString()
-	return dao.DB().CreateUser(
-		ctx,
-		&types.User{
-			ID:       userId,
-			Name:     "test",
-			Email:    userId[:8] + "test@test.com",
-			Password: "test",
-			OrgID:    organization.ID.StringValue(),
-			Role:     authtypes.RoleAdmin.String(),
-		},
-		true,
-	)
+	random, err := utils.RandomHex(3)
+	if err != nil {
+		return nil, model.InternalError(err)
+	}
+
+	user, err := types.NewUser("test", random+"test@test.com", types.RoleAdmin.String(), organization.ID.StringValue())
+	if err != nil {
+		return nil, model.InternalError(err)
+	}
+	err = userModule.CreateUser(ctx, user)
+	if err != nil {
+		return nil, model.InternalError(err)
+	}
+	return user, nil
 }
