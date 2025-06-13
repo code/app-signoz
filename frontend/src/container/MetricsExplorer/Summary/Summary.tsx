@@ -1,23 +1,28 @@
 import './Summary.styles.scss';
 
 import * as Sentry from '@sentry/react';
-import { initialQueriesMap, PANEL_TYPES } from 'constants/queryBuilder';
+import logEvent from 'api/common/logEvent';
+import { initialQueriesMap } from 'constants/queryBuilder';
 import { usePageSize } from 'container/InfraMonitoringK8s/utils';
 import { useGetMetricsList } from 'hooks/metricsExplorer/useGetMetricsList';
 import { useGetMetricsTreeMap } from 'hooks/metricsExplorer/useGetMetricsTreeMap';
-import { useQueryBuilder } from 'hooks/queryBuilder/useQueryBuilder';
-import { useQueryOperations } from 'hooks/queryBuilder/useQueryBuilderOperations';
-import { useShareBuilderUrl } from 'hooks/queryBuilder/useShareBuilderUrl';
 import ErrorBoundaryFallback from 'pages/ErrorBoundaryFallback/ErrorBoundaryFallback';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
+import { useSearchParams } from 'react-router-dom-v5-compat';
 import { AppState } from 'store/reducers';
 import { TagFilter } from 'types/api/queryBuilder/queryBuilderData';
-import { DataSource } from 'types/common/queryBuilder';
 import { GlobalReducer } from 'types/reducer/globalTime';
 
+import { MetricsExplorerEventKeys, MetricsExplorerEvents } from '../events';
 import InspectModal from '../Inspect';
 import MetricDetails from '../MetricDetails';
+import {
+	IS_INSPECT_MODAL_OPEN_KEY,
+	IS_METRIC_DETAILS_OPEN_KEY,
+	SELECTED_METRIC_NAME_KEY,
+	SUMMARY_FILTERS_KEY,
+} from './constants';
 import MetricsSearch from './MetricsSearch';
 import MetricsTable from './MetricsTable';
 import MetricsTreemap from './MetricsTreemap';
@@ -40,55 +45,53 @@ function Summary(): JSX.Element {
 	const [heatmapView, setHeatmapView] = useState<TreemapViewType>(
 		TreemapViewType.TIMESERIES,
 	);
-	const [isMetricDetailsOpen, setIsMetricDetailsOpen] = useState(false);
-	const [isInspectModalOpen, setIsInspectModalOpen] = useState(false);
-	const [selectedMetricName, setSelectedMetricName] = useState<string | null>(
-		null,
+
+	const [searchParams, setSearchParams] = useSearchParams();
+	const [isMetricDetailsOpen, setIsMetricDetailsOpen] = useState(
+		() => searchParams.get(IS_METRIC_DETAILS_OPEN_KEY) === 'true' || false,
+	);
+	const [isInspectModalOpen, setIsInspectModalOpen] = useState(
+		() => searchParams.get(IS_INSPECT_MODAL_OPEN_KEY) === 'true' || false,
+	);
+	const [selectedMetricName, setSelectedMetricName] = useState(
+		() => searchParams.get(SELECTED_METRIC_NAME_KEY) || null,
 	);
 
 	const { maxTime, minTime } = useSelector<AppState, GlobalReducer>(
 		(state) => state.globalTime,
 	);
 
-	const { currentQuery, updateAllQueriesOperators } = useQueryBuilder();
-
-	const defaultQuery = useMemo(() => {
-		const query = updateAllQueriesOperators(
-			initialQueriesMap.metrics,
-			PANEL_TYPES.LIST,
-			DataSource.METRICS,
-		);
-
+	const queryFilters: TagFilter = useMemo(() => {
+		const encodedFilters = searchParams.get(SUMMARY_FILTERS_KEY);
+		if (encodedFilters) {
+			return JSON.parse(encodedFilters);
+		}
 		return {
-			...query,
-			builder: {
-				...query.builder,
-				queryData: [
-					{
-						...query.builder.queryData[0],
-						orderBy: [DEFAULT_ORDER_BY],
-					},
-				],
-			},
+			items: [],
+			op: 'AND',
 		};
-	}, [updateAllQueriesOperators]);
+	}, [searchParams]);
 
-	useShareBuilderUrl(defaultQuery);
+	useEffect(() => {
+		logEvent(MetricsExplorerEvents.TabChanged, {
+			[MetricsExplorerEventKeys.Tab]: 'summary',
+		});
+	}, []);
 
-	const queryFilters = useMemo(
-		() =>
-			currentQuery?.builder?.queryData[0]?.filters || {
-				items: [],
-				op: 'and',
-			},
-		[currentQuery],
-	);
+	useEffect(() => {
+		logEvent(MetricsExplorerEvents.TimeUpdated, {
+			[MetricsExplorerEventKeys.Tab]: 'summary',
+		});
+	}, [maxTime, minTime]);
 
-	const { handleChangeQueryData } = useQueryOperations({
-		index: 0,
-		query: currentQuery.builder.queryData[0],
-		entityVersion: '',
-	});
+	// This is used to avoid the filters from being serialized with the id
+	const queryFiltersWithoutId = useMemo(() => {
+		const filtersWithoutId = {
+			...queryFilters,
+			items: queryFilters.items.map(({ id, ...rest }) => rest),
+		};
+		return JSON.stringify(filtersWithoutId);
+	}, [queryFilters]);
 
 	const metricsListQuery = useMemo(() => {
 		const baseQuery = getMetricsListQuery();
@@ -121,6 +124,15 @@ function Summary(): JSX.Element {
 		isError: isMetricsError,
 	} = useGetMetricsList(metricsListQuery, {
 		enabled: !!metricsListQuery && !isInspectModalOpen,
+		queryKey: [
+			'metricsList',
+			queryFiltersWithoutId,
+			orderBy,
+			pageSize,
+			currentPage,
+			minTime,
+			maxTime,
+		],
 	});
 
 	const isListViewError = useMemo(
@@ -135,6 +147,13 @@ function Summary(): JSX.Element {
 		isError: isTreeMapError,
 	} = useGetMetricsTreeMap(metricsTreemapQuery, {
 		enabled: !!metricsTreemapQuery && !isInspectModalOpen,
+		queryKey: [
+			'metricsTreemap',
+			queryFiltersWithoutId,
+			heatmapView,
+			minTime,
+			maxTime,
+		],
 	});
 
 	const isProportionViewError = useMemo(
@@ -144,36 +163,37 @@ function Summary(): JSX.Element {
 
 	const handleFilterChange = useCallback(
 		(value: TagFilter) => {
-			handleChangeQueryData('filters', value);
+			setSearchParams({
+				...Object.fromEntries(searchParams.entries()),
+				[SUMMARY_FILTERS_KEY]: JSON.stringify(value),
+			});
 			setCurrentPage(1);
+			logEvent(MetricsExplorerEvents.FilterApplied, {
+				[MetricsExplorerEventKeys.Tab]: 'summary',
+			});
 		},
-		[handleChangeQueryData],
+		[setSearchParams, searchParams],
 	);
 
-	const updatedCurrentQuery = useMemo(
+	const searchQuery = useMemo(
 		() => ({
-			...currentQuery,
-			builder: {
-				...currentQuery.builder,
-				queryData: [
-					{
-						...currentQuery.builder.queryData[0],
-						aggregateOperator: 'noop',
-						aggregateAttribute: {
-							...currentQuery.builder.queryData[0].aggregateAttribute,
-						},
-					},
-				],
-			},
+			...initialQueriesMap.metrics.builder.queryData[0],
+			filters: queryFilters,
 		}),
-		[currentQuery],
+		[queryFilters],
 	);
-
-	const searchQuery = updatedCurrentQuery?.builder?.queryData[0] || null;
 
 	const onPaginationChange = (page: number, pageSize: number): void => {
 		setCurrentPage(page);
 		setPageSize(pageSize);
+		logEvent(MetricsExplorerEvents.PageNumberChanged, {
+			[MetricsExplorerEventKeys.Tab]: 'summary',
+			[MetricsExplorerEventKeys.PageNumber]: page,
+		});
+		logEvent(MetricsExplorerEvents.PageSizeChanged, {
+			[MetricsExplorerEventKeys.Tab]: 'summary',
+			[MetricsExplorerEventKeys.PageSize]: pageSize,
+		});
 	};
 
 	const formattedMetricsData = useMemo(
@@ -181,46 +201,82 @@ function Summary(): JSX.Element {
 		[metricsData],
 	);
 
-	const openMetricDetails = (metricName: string): void => {
+	const openMetricDetails = (
+		metricName: string,
+		view: 'list' | 'treemap',
+	): void => {
 		setSelectedMetricName(metricName);
 		setIsMetricDetailsOpen(true);
+		setSearchParams({
+			...Object.fromEntries(searchParams.entries()),
+			[IS_METRIC_DETAILS_OPEN_KEY]: 'true',
+			[SELECTED_METRIC_NAME_KEY]: metricName,
+		});
+		logEvent(MetricsExplorerEvents.MetricClicked, {
+			[MetricsExplorerEventKeys.MetricName]: metricName,
+			[MetricsExplorerEventKeys.View]: view,
+		});
 	};
 
 	const closeMetricDetails = (): void => {
 		setSelectedMetricName(null);
 		setIsMetricDetailsOpen(false);
+		setSearchParams({
+			...Object.fromEntries(searchParams.entries()),
+			[IS_METRIC_DETAILS_OPEN_KEY]: 'false',
+			[SELECTED_METRIC_NAME_KEY]: '',
+		});
 	};
 
 	const openInspectModal = (metricName: string): void => {
 		setSelectedMetricName(metricName);
 		setIsInspectModalOpen(true);
 		setIsMetricDetailsOpen(false);
+		setSearchParams({
+			...Object.fromEntries(searchParams.entries()),
+			[IS_INSPECT_MODAL_OPEN_KEY]: 'true',
+			[SELECTED_METRIC_NAME_KEY]: metricName,
+		});
 	};
 
 	const closeInspectModal = (): void => {
-		handleChangeQueryData('filters', {
-			items: [],
-			op: 'AND',
-		});
 		setIsInspectModalOpen(false);
 		setSelectedMetricName(null);
+		setSearchParams({
+			...Object.fromEntries(searchParams.entries()),
+			[IS_INSPECT_MODAL_OPEN_KEY]: 'false',
+			[SELECTED_METRIC_NAME_KEY]: '',
+		});
+	};
+
+	const handleSetHeatmapView = (view: TreemapViewType): void => {
+		setHeatmapView(view);
+		logEvent(MetricsExplorerEvents.TreemapViewChanged, {
+			[MetricsExplorerEventKeys.Tab]: 'summary',
+			[MetricsExplorerEventKeys.ViewType]: view,
+		});
+	};
+
+	const handleSetOrderBy = (orderBy: OrderByPayload): void => {
+		setOrderBy(orderBy);
+		logEvent(MetricsExplorerEvents.OrderByApplied, {
+			[MetricsExplorerEventKeys.Tab]: 'summary',
+			[MetricsExplorerEventKeys.ColumnName]: orderBy.columnName,
+			[MetricsExplorerEventKeys.Order]: orderBy.order,
+		});
 	};
 
 	return (
 		<Sentry.ErrorBoundary fallback={<ErrorBoundaryFallback />}>
 			<div className="metrics-explorer-summary-tab">
-				<MetricsSearch
-					query={searchQuery}
-					onChange={handleFilterChange}
-					heatmapView={heatmapView}
-					setHeatmapView={setHeatmapView}
-				/>
+				<MetricsSearch query={searchQuery} onChange={handleFilterChange} />
 				<MetricsTreemap
 					data={treeMapData?.payload}
 					isLoading={isTreeMapLoading || isTreeMapFetching}
 					isError={isProportionViewError}
 					viewType={heatmapView}
 					openMetricDetails={openMetricDetails}
+					setHeatmapView={handleSetHeatmapView}
 				/>
 				<MetricsTable
 					isLoading={isMetricsLoading || isMetricsFetching}
@@ -229,9 +285,10 @@ function Summary(): JSX.Element {
 					pageSize={pageSize}
 					currentPage={currentPage}
 					onPaginationChange={onPaginationChange}
-					setOrderBy={setOrderBy}
+					setOrderBy={handleSetOrderBy}
 					totalCount={metricsData?.payload?.data?.total || 0}
 					openMetricDetails={openMetricDetails}
+					queryFilters={queryFilters}
 				/>
 			</div>
 			{isMetricDetailsOpen && (

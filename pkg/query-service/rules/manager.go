@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,10 +18,10 @@ import (
 
 	"github.com/SigNoz/signoz/pkg/alertmanager"
 	"github.com/SigNoz/signoz/pkg/cache"
+	"github.com/SigNoz/signoz/pkg/modules/organization"
 	"github.com/SigNoz/signoz/pkg/prometheus"
 	"github.com/SigNoz/signoz/pkg/query-service/interfaces"
 	"github.com/SigNoz/signoz/pkg/query-service/model"
-	"github.com/SigNoz/signoz/pkg/query-service/telemetry"
 	"github.com/SigNoz/signoz/pkg/ruler/rulestore/sqlrulestore"
 	"github.com/SigNoz/signoz/pkg/sqlstore"
 	"github.com/SigNoz/signoz/pkg/telemetrystore"
@@ -96,6 +95,7 @@ type ManagerOptions struct {
 	PrepareTestRuleFunc func(opts PrepareTestRuleOptions) (int, *model.ApiError)
 	Alertmanager        alertmanager.Alertmanager
 	SQLStore            sqlstore.SQLStore
+	OrgGetter           organization.Getter
 }
 
 // The Manager manages recording and alerting rules.
@@ -117,6 +117,7 @@ type Manager struct {
 
 	alertmanager alertmanager.Alertmanager
 	sqlstore     sqlstore.SQLStore
+	orgGetter    organization.Getter
 }
 
 func defaultOptions(o *ManagerOptions) *ManagerOptions {
@@ -194,10 +195,9 @@ func defaultPrepareTaskFunc(opts PrepareTaskOptions) (Task, error) {
 // by calling the Run method.
 func NewManager(o *ManagerOptions) (*Manager, error) {
 	o = defaultOptions(o)
-	ruleStore := sqlrulestore.NewRuleStore(o.DBConn, o.SQLStore)
+	ruleStore := sqlrulestore.NewRuleStore(o.SQLStore)
 	maintenanceStore := sqlrulestore.NewMaintenanceStore(o.SQLStore)
 
-	telemetry.GetInstance().SetAlertsInfoCallback(ruleStore.GetAlertsInfo)
 	m := &Manager{
 		tasks:               map[string]Task{},
 		rules:               map[string]Rule{},
@@ -212,6 +212,7 @@ func NewManager(o *ManagerOptions) (*Manager, error) {
 		prepareTestRuleFunc: o.PrepareTestRuleFunc,
 		alertmanager:        o.Alertmanager,
 		sqlstore:            o.SQLStore,
+		orgGetter:           o.OrgGetter,
 	}
 
 	return m, nil
@@ -241,14 +242,14 @@ func (m *Manager) Pause(b bool) {
 }
 
 func (m *Manager) initiate(ctx context.Context) error {
-	orgIDs, err := m.ruleStore.ListOrgs(ctx)
+	orgs, err := m.orgGetter.ListByOwnedKeyRange(ctx)
 	if err != nil {
 		return err
 	}
 
 	var loadErrors []error
-	for _, orgID := range orgIDs {
-		storedRules, err := m.ruleStore.GetStoredRules(ctx, orgID.StringValue())
+	for _, org := range orgs {
+		storedRules, err := m.ruleStore.GetStoredRules(ctx, org.ID.StringValue())
 		if err != nil {
 			return err
 		}
@@ -281,7 +282,7 @@ func (m *Manager) initiate(ctx context.Context) error {
 				}
 			}
 			if !parsedRule.Disabled {
-				err := m.addTask(ctx, orgID, parsedRule, taskName)
+				err := m.addTask(ctx, org.ID, parsedRule, taskName)
 				if err != nil {
 					zap.L().Error("failed to load the rule definition", zap.String("name", taskName), zap.Error(err))
 				}
@@ -318,7 +319,7 @@ func (m *Manager) Stop(ctx context.Context) {
 
 // EditRuleDefinition writes the rule definition to the
 // datastore and also updates the rule executor
-func (m *Manager) EditRule(ctx context.Context, ruleStr string, idStr string) error {
+func (m *Manager) EditRule(ctx context.Context, ruleStr string, id valuer.UUID) error {
 	claims, err := authtypes.ClaimsFromContext(ctx)
 	if err != nil {
 		return err
@@ -328,26 +329,12 @@ func (m *Manager) EditRule(ctx context.Context, ruleStr string, idStr string) er
 		return err
 	}
 
-	ruleUUID, err := valuer.NewUUID(idStr)
-	if err != nil {
-		id, err := strconv.Atoi(idStr)
-		if err != nil {
-			return err
-		}
-		ruleHistory, err := m.ruleStore.GetRuleUUID(ctx, id)
-		if err != nil {
-			return err
-		}
-
-		ruleUUID = ruleHistory.RuleUUID
-	}
-
 	parsedRule, err := ruletypes.ParsePostableRule([]byte(ruleStr))
 	if err != nil {
 		return err
 	}
 
-	existingRule, err := m.ruleStore.GetStoredRule(ctx, ruleUUID)
+	existingRule, err := m.ruleStore.GetStoredRule(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -376,7 +363,7 @@ func (m *Manager) EditRule(ctx context.Context, ruleStr string, idStr string) er
 			preferredChannels = parsedRule.PreferredChannels
 		}
 
-		err = cfg.UpdateRuleIDMatcher(ruleUUID.StringValue(), preferredChannels)
+		err = cfg.UpdateRuleIDMatcher(id.StringValue(), preferredChannels)
 		if err != nil {
 			return err
 		}
@@ -824,22 +811,8 @@ func (m *Manager) ListRuleStates(ctx context.Context) (*ruletypes.GettableRules,
 	return &ruletypes.GettableRules{Rules: resp}, nil
 }
 
-func (m *Manager) GetRule(ctx context.Context, idStr string) (*ruletypes.GettableRule, error) {
-	ruleUUID, err := valuer.NewUUID(idStr)
-	if err != nil {
-		id, err := strconv.Atoi(idStr)
-		if err != nil {
-			return nil, err
-		}
-		ruleHistory, err := m.ruleStore.GetRuleUUID(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-
-		ruleUUID = ruleHistory.RuleUUID
-	}
-
-	s, err := m.ruleStore.GetStoredRule(ctx, ruleUUID)
+func (m *Manager) GetRule(ctx context.Context, id valuer.UUID) (*ruletypes.GettableRule, error) {
+	s, err := m.ruleStore.GetStoredRule(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -847,7 +820,7 @@ func (m *Manager) GetRule(ctx context.Context, idStr string) (*ruletypes.Gettabl
 	if err := json.Unmarshal([]byte(s.Data), r); err != nil {
 		return nil, err
 	}
-	r.Id = ruleUUID.StringValue()
+	r.Id = id.StringValue()
 	// fetch state of rule from memory
 	if rm, ok := m.rules[r.Id]; !ok {
 		r.State = model.StateDisabled
@@ -897,7 +870,7 @@ func (m *Manager) syncRuleStateWithTask(ctx context.Context, orgID valuer.UUID, 
 //   - over write the patch attributes received in input (ruleStr)
 //   - re-deploy or undeploy task as necessary
 //   - update the patched rule in the DB
-func (m *Manager) PatchRule(ctx context.Context, ruleStr string, ruleIdStr string) (*ruletypes.GettableRule, error) {
+func (m *Manager) PatchRule(ctx context.Context, ruleStr string, id valuer.UUID) (*ruletypes.GettableRule, error) {
 	claims, err := authtypes.ClaimsFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -908,24 +881,19 @@ func (m *Manager) PatchRule(ctx context.Context, ruleStr string, ruleIdStr strin
 		return nil, err
 	}
 
-	ruleID, err := valuer.NewUUID(ruleIdStr)
-	if err != nil {
-		return nil, errors.New(err.Error())
-	}
-
-	taskName := prepareTaskName(ruleID.StringValue())
+	taskName := prepareTaskName(id.StringValue())
 
 	// retrieve rule from DB
-	storedJSON, err := m.ruleStore.GetStoredRule(ctx, ruleID)
+	storedJSON, err := m.ruleStore.GetStoredRule(ctx, id)
 	if err != nil {
-		zap.L().Error("failed to get stored rule with given id", zap.String("id", ruleID.StringValue()), zap.Error(err))
+		zap.L().Error("failed to get stored rule with given id", zap.String("id", id.StringValue()), zap.Error(err))
 		return nil, err
 	}
 
 	// storedRule holds the current stored rule from DB
 	storedRule := ruletypes.PostableRule{}
 	if err := json.Unmarshal([]byte(storedJSON.Data), &storedRule); err != nil {
-		zap.L().Error("failed to unmarshal stored rule with given id", zap.String("id", ruleID.StringValue()), zap.Error(err))
+		zap.L().Error("failed to unmarshal stored rule with given id", zap.String("id", id.StringValue()), zap.Error(err))
 		return nil, err
 	}
 
@@ -962,12 +930,12 @@ func (m *Manager) PatchRule(ctx context.Context, ruleStr string, ruleIdStr strin
 
 	// prepare http response
 	response := ruletypes.GettableRule{
-		Id:           ruleID.StringValue(),
+		Id:           id.StringValue(),
 		PostableRule: *patchedRule,
 	}
 
 	// fetch state of rule from memory
-	if rm, ok := m.rules[ruleID.StringValue()]; !ok {
+	if rm, ok := m.rules[id.StringValue()]; !ok {
 		response.State = model.StateDisabled
 		response.Disabled = true
 	} else {

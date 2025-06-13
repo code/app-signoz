@@ -3,12 +3,22 @@ package cloudintegrations
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/SigNoz/signoz/pkg/alertmanager"
+	"github.com/SigNoz/signoz/pkg/alertmanager/alertmanagerserver"
+	"github.com/SigNoz/signoz/pkg/alertmanager/signozalertmanager"
+	"github.com/SigNoz/signoz/pkg/analytics/analyticstest"
+	"github.com/SigNoz/signoz/pkg/emailing/emailingtest"
+	"github.com/SigNoz/signoz/pkg/instrumentation/instrumentationtest"
 	"github.com/SigNoz/signoz/pkg/modules/organization"
 	"github.com/SigNoz/signoz/pkg/modules/organization/implorganization"
-	"github.com/SigNoz/signoz/pkg/query-service/dao"
+	"github.com/SigNoz/signoz/pkg/modules/user"
 	"github.com/SigNoz/signoz/pkg/query-service/model"
 	"github.com/SigNoz/signoz/pkg/query-service/utils"
+	"github.com/SigNoz/signoz/pkg/sharder"
+	"github.com/SigNoz/signoz/pkg/sharder/noopsharder"
+	"github.com/SigNoz/signoz/pkg/signoz"
 	"github.com/SigNoz/signoz/pkg/types"
 	"github.com/SigNoz/signoz/pkg/types/authtypes"
 	"github.com/google/uuid"
@@ -21,8 +31,17 @@ func TestRegenerateConnectionUrlWithUpdatedConfig(t *testing.T) {
 	controller, err := NewController(sqlStore)
 	require.NoError(err)
 
-	organizationModule := implorganization.NewModule(implorganization.NewStore(sqlStore))
-	user, apiErr := createTestUser(organizationModule)
+	providerSettings := instrumentationtest.New().ToProviderSettings()
+	sharder, err := noopsharder.New(context.TODO(), providerSettings, sharder.Config{})
+	require.NoError(err)
+	orgGetter := implorganization.NewGetter(implorganization.NewStore(sqlStore), sharder)
+	alertmanager, err := signozalertmanager.New(context.TODO(), providerSettings, alertmanager.Config{Provider: "signoz", Signoz: alertmanager.Signoz{PollInterval: 10 * time.Second, Config: alertmanagerserver.NewConfig()}}, sqlStore, orgGetter)
+	require.NoError(err)
+	jwt := authtypes.NewJWT("", 1*time.Hour, 1*time.Hour)
+	emailing := emailingtest.New()
+	analytics := analyticstest.New()
+	modules := signoz.NewModules(sqlStore, jwt, emailing, providerSettings, orgGetter, alertmanager, analytics)
+	user, apiErr := createTestUser(modules.OrgSetter, modules.User)
 	require.Nil(apiErr)
 
 	// should be able to generate connection url for
@@ -68,8 +87,18 @@ func TestAgentCheckIns(t *testing.T) {
 	sqlStore := utils.NewQueryServiceDBForTests(t)
 	controller, err := NewController(sqlStore)
 	require.NoError(err)
-	organizationModule := implorganization.NewModule(implorganization.NewStore(sqlStore))
-	user, apiErr := createTestUser(organizationModule)
+
+	providerSettings := instrumentationtest.New().ToProviderSettings()
+	sharder, err := noopsharder.New(context.TODO(), providerSettings, sharder.Config{})
+	require.NoError(err)
+	orgGetter := implorganization.NewGetter(implorganization.NewStore(sqlStore), sharder)
+	alertmanager, err := signozalertmanager.New(context.TODO(), providerSettings, alertmanager.Config{Provider: "signoz", Signoz: alertmanager.Signoz{PollInterval: 10 * time.Second, Config: alertmanagerserver.NewConfig()}}, sqlStore, orgGetter)
+	require.NoError(err)
+	jwt := authtypes.NewJWT("", 1*time.Hour, 1*time.Hour)
+	emailing := emailingtest.New()
+	analytics := analyticstest.New()
+	modules := signoz.NewModules(sqlStore, jwt, emailing, providerSettings, orgGetter, alertmanager, analytics)
+	user, apiErr := createTestUser(modules.OrgSetter, modules.User)
 	require.Nil(apiErr)
 
 	// An agent should be able to check in from a cloud account even
@@ -155,8 +184,17 @@ func TestCantDisconnectNonExistentAccount(t *testing.T) {
 	controller, err := NewController(sqlStore)
 	require.NoError(err)
 
-	organizationModule := implorganization.NewModule(implorganization.NewStore(sqlStore))
-	user, apiErr := createTestUser(organizationModule)
+	providerSettings := instrumentationtest.New().ToProviderSettings()
+	sharder, err := noopsharder.New(context.TODO(), providerSettings, sharder.Config{})
+	require.NoError(err)
+	orgGetter := implorganization.NewGetter(implorganization.NewStore(sqlStore), sharder)
+	alertmanager, err := signozalertmanager.New(context.TODO(), providerSettings, alertmanager.Config{Provider: "signoz", Signoz: alertmanager.Signoz{PollInterval: 10 * time.Second, Config: alertmanagerserver.NewConfig()}}, sqlStore, orgGetter)
+	require.NoError(err)
+	jwt := authtypes.NewJWT("", 1*time.Hour, 1*time.Hour)
+	emailing := emailingtest.New()
+	analytics := analyticstest.New()
+	modules := signoz.NewModules(sqlStore, jwt, emailing, providerSettings, orgGetter, alertmanager, analytics)
+	user, apiErr := createTestUser(modules.OrgSetter, modules.User)
 	require.Nil(apiErr)
 
 	// Attempting to disconnect a non-existent account should return error
@@ -174,8 +212,17 @@ func TestConfigureService(t *testing.T) {
 	controller, err := NewController(sqlStore)
 	require.NoError(err)
 
-	organizationModule := implorganization.NewModule(implorganization.NewStore(sqlStore))
-	user, apiErr := createTestUser(organizationModule)
+	providerSettings := instrumentationtest.New().ToProviderSettings()
+	sharder, err := noopsharder.New(context.TODO(), providerSettings, sharder.Config{})
+	require.NoError(err)
+	orgGetter := implorganization.NewGetter(implorganization.NewStore(sqlStore), sharder)
+	alertmanager, err := signozalertmanager.New(context.TODO(), providerSettings, alertmanager.Config{Provider: "signoz", Signoz: alertmanager.Signoz{PollInterval: 10 * time.Second, Config: alertmanagerserver.NewConfig()}}, sqlStore, orgGetter)
+	require.NoError(err)
+	jwt := authtypes.NewJWT("", 1*time.Hour, 1*time.Hour)
+	emailing := emailingtest.New()
+	analytics := analyticstest.New()
+	modules := signoz.NewModules(sqlStore, jwt, emailing, providerSettings, orgGetter, alertmanager, analytics)
+	user, apiErr := createTestUser(modules.OrgSetter, modules.User)
 	require.Nil(apiErr)
 
 	// create a connected account
@@ -290,7 +337,7 @@ func makeTestConnectedAccount(t *testing.T, orgId string, controller *Controller
 	return acc
 }
 
-func createTestUser(organizationModule organization.Module) (*types.User, *model.ApiError) {
+func createTestUser(organizationModule organization.Setter, userModule user.Module) (*types.User, *model.ApiError) {
 	// Create a test user for auth
 	ctx := context.Background()
 	organization := types.NewOrganization("test")
@@ -299,17 +346,18 @@ func createTestUser(organizationModule organization.Module) (*types.User, *model
 		return nil, model.InternalError(err)
 	}
 
-	userId := uuid.NewString()
-	return dao.DB().CreateUser(
-		ctx,
-		&types.User{
-			ID:       userId,
-			Name:     "test",
-			Email:    userId[:8] + "test@test.com",
-			Password: "test",
-			OrgID:    organization.ID.StringValue(),
-			Role:     authtypes.RoleAdmin.String(),
-		},
-		true,
-	)
+	random, err := utils.RandomHex(3)
+	if err != nil {
+		return nil, model.InternalError(err)
+	}
+
+	user, err := types.NewUser("test", random+"test@test.com", types.RoleAdmin.String(), organization.ID.StringValue())
+	if err != nil {
+		return nil, model.InternalError(err)
+	}
+	err = userModule.CreateUser(ctx, user)
+	if err != nil {
+		return nil, model.InternalError(err)
+	}
+	return user, nil
 }
