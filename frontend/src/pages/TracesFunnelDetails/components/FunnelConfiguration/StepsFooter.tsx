@@ -1,8 +1,50 @@
 import './StepsFooter.styles.scss';
 
-import { Button, Skeleton } from 'antd';
-import { Cone, Play } from 'lucide-react';
+import { LoadingOutlined } from '@ant-design/icons';
+import { Button, Skeleton, Spin } from 'antd';
+import { REACT_QUERY_KEY } from 'constants/reactQueryKeys';
+import { Cone, Play, RefreshCcw } from 'lucide-react';
 import { useFunnelContext } from 'pages/TracesFunnels/FunnelContext';
+import { useMemo } from 'react';
+import { useIsFetching, useIsMutating } from 'react-query';
+
+const useFunnelResultsLoading = (): boolean => {
+	const { funnelId } = useFunnelContext();
+
+	const isFetchingFunnelOverview = useIsFetching({
+		queryKey: [REACT_QUERY_KEY.GET_FUNNEL_OVERVIEW, funnelId],
+	});
+
+	const isFetchingStepsGraphData = useIsFetching({
+		queryKey: [REACT_QUERY_KEY.GET_FUNNEL_STEPS_GRAPH_DATA, funnelId],
+	});
+
+	const isFetchingErrorTraces = useIsFetching({
+		queryKey: [REACT_QUERY_KEY.GET_FUNNEL_ERROR_TRACES, funnelId],
+	});
+
+	const isFetchingSlowTraces = useIsFetching({
+		queryKey: [REACT_QUERY_KEY.GET_FUNNEL_SLOW_TRACES, funnelId],
+	});
+
+	return useMemo(() => {
+		if (!funnelId) {
+			return false;
+		}
+		return (
+			!!isFetchingFunnelOverview ||
+			!!isFetchingStepsGraphData ||
+			!!isFetchingErrorTraces ||
+			!!isFetchingSlowTraces
+		);
+	}, [
+		funnelId,
+		isFetchingFunnelOverview,
+		isFetchingStepsGraphData,
+		isFetchingErrorTraces,
+		isFetchingSlowTraces,
+	]);
+};
 
 interface StepsFooterProps {
 	stepsCount: number;
@@ -14,10 +56,13 @@ function ValidTracesCount(): JSX.Element {
 		isValidateStepsLoading,
 		hasIncompleteStepFields,
 		validTracesCount,
+		funnelId,
 	} = useFunnelContext();
-	if (isValidateStepsLoading) {
-		return <Skeleton.Button size="small" />;
-	}
+
+	const isFunnelUpdateMutating = useIsMutating([
+		REACT_QUERY_KEY.UPDATE_FUNNEL_STEPS,
+		funnelId,
+	]);
 
 	if (hasAllEmptyStepFields) {
 		return (
@@ -33,6 +78,10 @@ function ValidTracesCount(): JSX.Element {
 		);
 	}
 
+	if (isValidateStepsLoading || isFunnelUpdateMutating) {
+		return <Skeleton.Button size="small" />;
+	}
+
 	if (validTracesCount === 0) {
 		return (
 			<span className="steps-footer__valid-traces steps-footer__valid-traces--none">
@@ -45,7 +94,19 @@ function ValidTracesCount(): JSX.Element {
 }
 
 function StepsFooter({ stepsCount }: StepsFooterProps): JSX.Element {
-	const { validTracesCount, handleRunFunnel } = useFunnelContext();
+	const {
+		validTracesCount,
+		handleRunFunnel,
+		hasFunnelBeenExecuted,
+		funnelId,
+	} = useFunnelContext();
+
+	const isFunnelResultsLoading = useFunnelResultsLoading();
+
+	const isFunnelUpdateMutating = useIsMutating([
+		REACT_QUERY_KEY.UPDATE_FUNNEL_STEPS,
+		funnelId,
+	]);
 
 	return (
 		<div className="steps-footer">
@@ -56,15 +117,38 @@ function StepsFooter({ stepsCount }: StepsFooterProps): JSX.Element {
 				<ValidTracesCount />
 			</div>
 			<div className="steps-footer__right">
-				<Button
-					disabled={validTracesCount === 0}
-					onClick={handleRunFunnel}
-					type="primary"
-					className="steps-footer__button steps-footer__button--run"
-					icon={<Play size={16} />}
-				>
-					Run funnel
-				</Button>
+				{!!isFunnelUpdateMutating && (
+					<div className="steps-footer__button steps-footer__button--updating">
+						<Spin
+							indicator={<LoadingOutlined style={{ color: 'grey' }} />}
+							size="small"
+						/>
+						Updating
+					</div>
+				)}
+
+				{!hasFunnelBeenExecuted ? (
+					<Button
+						disabled={validTracesCount === 0}
+						onClick={handleRunFunnel}
+						type="primary"
+						className="steps-footer__button steps-footer__button--run"
+						icon={<Play size={16} />}
+					>
+						Run funnel
+					</Button>
+				) : (
+					<Button
+						type="text"
+						className="steps-footer__button steps-footer__button--sync"
+						icon={<RefreshCcw size={16} />}
+						onClick={handleRunFunnel}
+						loading={isFunnelResultsLoading}
+						disabled={validTracesCount === 0}
+					>
+						Refresh
+					</Button>
+				)}
 			</div>
 		</div>
 	);
